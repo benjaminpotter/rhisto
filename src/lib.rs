@@ -104,8 +104,8 @@ impl Histogram {
     pub fn from_values(values: Vec<f32>, num_bins: usize) -> Self {
         let bins = match values
             .iter()
-            .fold(None, |acc: Option<(f32, f32)>, &x| match acc {
-                Some((min, max)) => Some((min.min(x), max.max(x))),
+            .fold(None, |acc: Option<(f32, f32)>, &value| match acc {
+                Some((min, max)) => Some((min.min(value), max.max(value))),
                 None => Some((f32::INFINITY, f32::NEG_INFINITY)),
             }) {
             Some((min, max)) => {
@@ -118,7 +118,9 @@ impl Histogram {
 
                 values
                     .iter()
-                    .map(|&x| get_bin_index(x, min, max, num_bins))
+                    .map(|&value| {
+                        ((value - min) / (max.next_up() - min) * num_bins as f32).trunc() as usize
+                    })
                     .for_each(|i| bins[i].count += 1);
 
                 bins
