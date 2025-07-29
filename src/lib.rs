@@ -1,98 +1,51 @@
-use std::io::{BufRead, Lines};
-use std::str::FromStr;
+use std::{collections::HashSet, str::FromStr};
 
 #[derive(Debug)]
 pub enum Error {
     InvalidRow(String),
-    FailedRead(String),
 }
 
-// struct ColumnParser<T, Reader>
-// - T must implement FromStr for ::parse<T>()
-// - Reader must implement Read for reading rows
-// - Takes:
-//   - reader: Read (may be a Stdin or a BufReader<File>)
-//   - column: usize
-//   - delim: &str
-// - Handle parsing into T using ::parse<T>()
-// - Provides iterator over rows via .rows()
-// - Columns are 0-indexed
-
-pub struct ColumnParser<T, Reader> {
-    lines: Lines<Reader>,
-    column: usize,
+pub struct ColumnParser<T> {
+    columns: HashSet<u32>,
     delim: String,
     _phantom: std::marker::PhantomData<T>,
 }
 
-impl<T: FromStr, Reader: BufRead> ColumnParser<T, Reader> {
-    pub fn new(reader: Reader, column: usize, delim: &str) -> Self {
+impl<T: FromStr> ColumnParser<T> {
+    pub fn new(columns: &[u32], delim: &str) -> Self {
         Self {
-            lines: reader.lines(),
-            column,
+            columns: HashSet::from_iter(columns.iter().cloned()),
             delim: delim.to_string(),
             _phantom: std::marker::PhantomData,
         }
     }
 
-    pub fn parse_row(&mut self) -> Option<Result<Option<T>, Error>> {
-        // Get next line from BufRead.
-        // If it returns None, there are no more lines to read.
-        match self.lines.next()? {
-            Ok(line) => {
-                // Split the line by delim and return the nth column.
-                match line.split(&self.delim).nth(self.column) {
-                    Some(value) => Some(Ok(value.parse::<T>().ok())),
+    pub fn single(column: u32, delim: &str) -> Self {
+        Self::new(&[column], delim)
+    }
 
-                    // Input is malformed or column is out of bounds.
-                    None => Some(Err(Error::InvalidRow(format!(
-                        "column {} does not exist in row",
-                        self.column
-                    )))),
-                }
-            }
+    pub fn parse_row(&self, row: &str) -> Result<Vec<T>, Error> {
+        let mut result: Vec<T> = Vec::new();
+        let vals: Vec<_> = row.split(&self.delim).collect();
+        for column in &self.columns {
+            let val = vals.get(*column as usize).ok_or(Error::InvalidRow(format!(
+                "column {} does not exist in row",
+                column
+            )))?;
 
-            // If next() returns an Err, then reading input failed.
-            Err(e) => Some(Err(Error::FailedRead(format!(
-                "failed to read line: {}",
-                e
-            )))),
+            let parsed = val
+                .parse::<T>()
+                .map_err(|_| Error::InvalidRow(format!("column {} cannot be parsed", column)))?;
+
+            result.push(parsed);
         }
-    }
 
-    pub fn rows(self) -> Rows<T, Reader> {
-        Rows { parser: self }
+        Ok(result)
     }
 }
-
-pub struct Rows<T, Reader> {
-    parser: ColumnParser<T, Reader>,
-}
-
-impl<T: FromStr, Reader: BufRead> Iterator for Rows<T, Reader> {
-    type Item = Result<Option<T>, Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.parser.parse_row()
-    }
-}
-
-// struct Histogram<T>
-// - Handles binning data on creation
-//   - fn from_values(values: Vec<T>, num_bins: usize) -> Self
-// - Can't be constructed from only an iterator
-//   - Need max and min
-//   - Need num_bins
-// - Bins:
-//   - Label
-//   - Count
-// - Can be converted to UTF-8:
-//   - Into csv
-//   - Into space delim
-// - Can this be plotted?
 
 pub struct Bin {
-    pub label: f32,
+    pub label: f64,
     pub count: usize,
 }
 
@@ -101,25 +54,26 @@ pub struct Histogram {
 }
 
 impl Histogram {
-    pub fn from_values(values: Vec<f32>, num_bins: usize) -> Self {
+    pub fn from_values(values: Vec<f64>, num_bins: usize) -> Self {
         let bins = match values
             .iter()
-            .fold(None, |acc: Option<(f32, f32)>, &value| match acc {
+            .fold(None, |acc: Option<(f64, f64)>, &value| match acc {
                 Some((min, max)) => Some((min.min(value), max.max(value))),
-                None => Some((f32::INFINITY, f32::NEG_INFINITY)),
+                None => Some((f64::INFINITY, f64::NEG_INFINITY)),
             }) {
             Some((min, max)) => {
-                let bin_width = (max - min) / num_bins as f32;
+                let bin_width = (max - min) / num_bins as f64;
                 let mut bins: Vec<Bin> = (0..num_bins)
                     .into_iter()
-                    .map(|i| i as f32 * bin_width + min + bin_width / 2.0)
+                    .map(|i| i as f64 * bin_width + min + bin_width / 2.0)
                     .map(|label| Bin { label, count: 0 })
                     .collect();
 
                 values
                     .iter()
                     .map(|&value| {
-                        ((value - min) / (max.next_up() - min) * num_bins as f32).trunc() as usize
+                        // FIXME: Some kind of race condition here?
+                        ((value - min) / (max.next_up() - min) * num_bins as f64).floor() as usize
                     })
                     .for_each(|i| bins[i].count += 1);
 
@@ -139,7 +93,7 @@ impl Histogram {
         self.bins.into_iter().map(|bin| bin.count).collect()
     }
 
-    pub fn into_labels(self) -> Vec<f32> {
+    pub fn into_labels(self) -> Vec<f64> {
         self.bins.into_iter().map(|bin| bin.label).collect()
     }
 }
@@ -154,7 +108,7 @@ mod tests {
         let data = "1.0,2.0,3.0\n4.0,5.0,6.0\n7.0,8.0,9.0\n";
         let cursor = Cursor::new(data);
 
-        let result: Vec<f32> = ColumnParser::<f32, _>::new(cursor, 1, ",")
+        let result: Vec<f64> = ColumnParser::<f64, _>::new(cursor, 1, ",")
             .rows()
             .filter_map(|row| row.unwrap())
             .collect();
