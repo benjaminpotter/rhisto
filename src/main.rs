@@ -32,7 +32,10 @@ fn main() {
                 .collect()
         }
         None => {
-            let expr = args.expr.unwrap();
+            let expr = args
+                .expr
+                .expect("clap arg groups enforce expr must be Some");
+
             let re = Regex::new(r"\?([0-9]*)").unwrap();
             let columns: Vec<u32> = re
                 .captures_iter(&expr)

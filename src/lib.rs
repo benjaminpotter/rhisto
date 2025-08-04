@@ -1,8 +1,9 @@
 use std::{collections::HashSet, str::FromStr};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum Error {
-    InvalidRow(String),
+    MissingColumn(String, u32),
+    FailedParse(String, String),
 }
 
 pub struct ColumnParser<T> {
@@ -28,14 +29,13 @@ impl<T: FromStr> ColumnParser<T> {
         let mut result: Vec<T> = Vec::new();
         let vals: Vec<_> = row.split(&self.delim).collect();
         for column in &self.columns {
-            let val = vals.get(*column as usize).ok_or(Error::InvalidRow(format!(
-                "column {} does not exist in row",
-                column
-            )))?;
+            let val = vals
+                .get(*column as usize)
+                .ok_or(Error::MissingColumn(row.to_string(), *column))?;
 
-            let parsed = val
-                .parse::<T>()
-                .map_err(|_| Error::InvalidRow(format!("column {} cannot be parsed", column)))?;
+            let parsed = val.parse::<T>().map_err(|_| {
+                Error::FailedParse(val.to_string(), std::any::type_name::<T>().to_string())
+            })?;
 
             result.push(parsed);
         }
@@ -101,30 +101,67 @@ impl Histogram {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Cursor;
 
     #[test]
-    fn test_column_parser() {
-        let data = "1.0,2.0,3.0\n4.0,5.0,6.0\n7.0,8.0,9.0\n";
-        let cursor = Cursor::new(data);
-
-        let result: Vec<f64> = ColumnParser::<f64, _>::new(cursor, 1, ",")
-            .rows()
-            .filter_map(|row| row.unwrap())
+    fn parse_column_from_rows() {
+        let parser = ColumnParser::<f64>::new(&[1], ",");
+        let result: Vec<f64> = vec!["1.0,2.0,3.0", "4.0,5.0,6.0", "7.0,8.0,9.0"]
+            .into_iter()
+            .map(|row| parser.parse_row(&row).unwrap()[0])
             .collect();
 
         assert_eq!(result, vec![2.0, 5.0, 8.0]);
     }
 
     #[test]
-    fn test_histogram_counts_from_values() {
+    fn missing_column() {
+        let parser = ColumnParser::<f64>::new(&[1], ",");
+        let result: Vec<Result<_, Error>> = vec!["1.0,2.0,3.0", "4.0", "7.0,8.0,9.0"]
+            .into_iter()
+            .map(|row| parser.parse_row(&row))
+            .collect();
+
+        assert_eq!(
+            result,
+            vec![
+                Ok(vec![2.0]),
+                Err(Error::MissingColumn("4.0".to_string(), 1)),
+                Ok(vec![8.0])
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_parse() {
+        let parser = ColumnParser::<f64>::new(&[1], ",");
+        let result: Vec<Result<_, Error>> =
+            vec!["1.0,2.0,3.0", "4.0,not_a_float,6.0", "7.0,8.0,9.0"]
+                .into_iter()
+                .map(|row| parser.parse_row(&row))
+                .collect();
+
+        assert_eq!(
+            result,
+            vec![
+                Ok(vec![2.0]),
+                Err(Error::FailedParse(
+                    "not_a_float".to_string(),
+                    "f64".to_string()
+                )),
+                Ok(vec![8.0])
+            ]
+        );
+    }
+
+    #[test]
+    fn histogram_counts_from_values() {
         let values = vec![2.0, 1.0, 2.0, 3.0, 3.0, 2.0, 0.0, 1.0, 1.0, 1.0];
         let histogram = Histogram::from_values(values, 3);
         assert_eq!(histogram.into_counts(), vec![5, 3, 2]);
     }
 
     #[test]
-    fn test_histogram_labels_from_values() {
+    fn histogram_labels_from_values() {
         let values = vec![2.0, 1.0, 2.0, 3.0, 3.0, 2.0, 0.0, 1.0, 1.0, 1.0];
         let histogram = Histogram::from_values(values, 3);
         assert_eq!(histogram.into_labels(), vec![0.5, 1.5, 2.5]);
