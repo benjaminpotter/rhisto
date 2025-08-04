@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn parse_column_from_rows() {
-        let parser = ColumnParser::<f64>::new(&[1], ",");
+        let parser = ColumnParser::<f64>::single(1, ",");
         let result: Vec<f64> = vec!["1.0,2.0,3.0", "4.0,5.0,6.0", "7.0,8.0,9.0"]
             .into_iter()
             .map(|row| parser.parse_row(&row).unwrap()[0])
